@@ -236,12 +236,17 @@ function createOrUpdateShader(fragSource) {
 }
 
 function compileShader() {
+  const predefines = `
+    float sdCircle(vec2 o, vec2 p, float r){
+      return length(o,p)-r;
+    }
+  `;
   const fragSource = `
     precision highp float;
     varying vec2 uv;
     uniform float time;
     uniform vec2 resolution;
-
+    ${predefines}
     void main() {
       gl_FragColor = vec4(1.0,0.0,1.0,1.0);
       ${document.getElementById("frag-editor").value}
