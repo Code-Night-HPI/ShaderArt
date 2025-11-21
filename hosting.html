@@ -1,0 +1,382 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Shader Editor + Upload</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<style>
+  body {
+    font-family: sans-serif;
+    max-width: 1200px;
+    margin: 40px auto;
+    overflow-x: hidden;
+  }
+
+  /* Main 2-column layout */
+  .editor-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-gap: 20px;
+    align-items: start;
+  }
+
+  canvas {
+    width: 100%;
+    height: auto;
+    border: 1px solid #333;
+    border-radius: 6px;
+  }
+
+  textarea {
+    width: 100%;
+    font-family: monospace;
+    padding: 10px;
+    border-radius: 6px;
+    border: 1px solid #aaa;
+    resize: vertical;
+  }
+
+  input, textarea {
+    width: 100%;
+    margin: 6px 0;
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px solid #999;
+  }
+
+  button {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 6px;
+    background: #4a7;
+    color: white;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  button:hover { background: #3a6; }
+
+  .shader {
+    border: 1px solid #ccc;
+    padding: 0px;
+    margin-bottom: 15px;
+  }
+
+  /* collapsible shader list items */
+  .collapsible {
+    background-color: #777;
+    color: white;
+    cursor: pointer;
+    padding: 8px;
+    width: 100%;
+    border: none;
+    text-align: left;
+    outline: none;
+    font-size: 15px;
+    border-radius: 4px;
+    margin-bottom: 5px;
+  }
+
+  .active, .collapsible:hover {
+    background-color: #555;
+  }
+
+  .content {
+    padding: 0 18px;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.2s ease-out;
+    background-color: #f1f1f1;
+    border-radius: 4px;
+    margin-top: 5px;
+  }
+
+  .shader-title {
+    font-size: 18px;
+    font-weight: bold;
+  }
+
+  .shader-description {
+    font-size: 13px;
+    margin-bottom: 10px;
+    color: #666;
+  }
+</style>
+
+</head>
+<body>
+
+<h1>WebGL Shader Editor + Sharing Platform</h1>
+
+<!-- ======================================================
+     NEW POLISHED TWO-COLUMN SHADER EDITOR
+======================================================= -->
+<div class="editor-layout">
+
+  <!-- LEFT: Canvas -->
+  <div>
+    <canvas id="glcanvas" width="600" height="400"></canvas>
+  </div>
+
+  <!-- RIGHT: Title, Description, Code -->
+  <div>
+      <input id="title" placeholder="Shader name (for uploads)">
+      <textarea id="description" placeholder="Shader description..."></textarea>
+
+      <h3>Fragment Shader</h3>
+      <textarea id="frag-editor" rows="16"></textarea>
+
+      <button onclick="compileShader()">Compile</button>
+  </div>
+
+</div>
+
+<hr>
+
+<!-- ======================================================
+     LOGIN / SIGNUP UI
+======================================================= -->
+<h2>Login / Signup</h2>
+<div id="auth-section">
+  <input id="email" type="email" placeholder="Email">
+  <input id="password" type="password" placeholder="Password">
+  <button onclick="signUp()">Sign Up</button>
+  <button onclick="signIn()">Log In</button>
+  <button onclick="signOut()">Log Out</button>
+
+  <p id="auth-status"></p>
+</div>
+
+<hr>
+
+<!-- ======================================================
+     UPLOAD SHADER UI
+======================================================= -->
+<h2>Upload Shader</h2>
+<div id="upload-section" style="display:none;">
+  <button onclick="uploadShader()">Upload Current Shader</button>
+</div>
+
+<hr>
+
+<!-- ======================================================
+     SHADER LIST
+======================================================= -->
+<h2>All Shaders (Everyone can view)</h2>
+<div id="shader-list"></div>
+
+
+
+
+<script>
+/* ============================================================
+   WEBGL SHADER SYSTEM
+============================================================ */
+
+const canvas = document.getElementById("glcanvas");
+const gl = canvas.getContext("webgl");
+
+let program = null;
+let startTime = performance.now();
+
+// Fullscreen quad
+const vertices = new Float32Array([
+  -1, -1,
+   1, -1,
+  -1,  1,
+   1,  1
+]);
+
+const vertexShaderSrc = `
+attribute vec2 points;
+varying vec2 uv;
+void main() {
+  uv = (points + 1.0) * 0.5;
+  gl_Position = vec4(points, 0.0, 1.0);
+}
+`;
+
+function makeShader(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    alert(gl.getShaderInfoLog(shader));
+    return null;
+  }
+  return shader;
+}
+
+function createOrUpdateShader(fragSource) {
+  const vertShader = makeShader(gl.VERTEX_SHADER, vertexShaderSrc);
+  const fragShader = makeShader(gl.FRAGMENT_SHADER, fragSource);
+  if (!vertShader || !fragShader) return;
+
+  const newProgram = gl.createProgram();
+  gl.attachShader(newProgram, vertShader);
+  gl.attachShader(newProgram, fragShader);
+  gl.linkProgram(newProgram);
+
+  if (!gl.getProgramParameter(newProgram, gl.LINK_STATUS)) {
+    alert(gl.getProgramInfoLog(newProgram));
+    return;
+  }
+
+  program = newProgram;
+  gl.useProgram(program);
+
+  const buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+
+  const loc = gl.getAttribLocation(program, "points");
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+}
+
+function compileShader() {
+  const fragSource = `
+    precision highp float;
+    varying vec2 uv;
+    uniform float time;
+    uniform vec2 resolution;
+
+    void main() {
+      gl_FragColor = vec4(1.0,0.0,1.0,1.0);
+      ${document.getElementById("frag-editor").value}
+    }
+  `;
+  createOrUpdateShader(fragSource);
+}
+
+function draw() {
+  if (!program) return;
+
+  gl.useProgram(program);
+
+  let t = (performance.now() - startTime) * 0.001;
+
+  gl.uniform1f(gl.getUniformLocation(program, "time"), t);
+  gl.uniform2f(gl.getUniformLocation(program, "resolution"), canvas.width, canvas.height);
+
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+// Default example shader
+document.getElementById("frag-editor").value =
+`gl_FragColor = vec4(uv.x, uv.y, 0.0, 1.0);`;
+
+compileShader();
+
+/* ============================================================
+   SUPABASE SYSTEM
+============================================================ */
+
+const supabase = window.supabase.createClient(
+  "https://pqudeymwixsnlisxgzvl.supabase.co",
+  "sb_publishable_GCOYrQA_hQJ6qwXL5d1tCQ_CLOxga24"
+);
+
+/* ---------- AUTH ---------- */
+
+async function signUp() {
+  const { error } = await supabase.auth.signUp({
+    email: email.value,
+    password: password.value,
+  });
+  if (error) alert(error.message);
+  else alert("Signup OK");
+}
+
+async function signIn() {
+  const { error } = await supabase.auth.signInWithPassword({
+    email: email.value,
+    password: password.value,
+  });
+  if (error) alert(error.message);
+}
+
+async function signOut() {
+  await supabase.auth.signOut();
+  alert("Logged out.");
+}
+
+supabase.auth.onAuthStateChange((_event, session) => updateAuthUI(session));
+
+async function updateAuthUI(session) {
+  const loggedIn = !!session;
+  document.getElementById("auth-status").textContent = loggedIn ? ("Logged in as: " + session.user.email) : ("Not logged in");
+  document.getElementById("upload-section").style.display = loggedIn ? "block" : "none";
+  loadShaders();
+}
+
+/* ---------- UPLOAD ---------- */
+
+async function uploadShader() {
+  const session = (await supabase.auth.getSession()).data.session;
+  if (!session) return alert("Not logged in.");
+
+  const title = document.getElementById("title").value || "Untitled Shader";
+  const description = document.getElementById("description").value;
+  const code = document.getElementById("frag-editor").value;
+
+  const { error } = await supabase.from("Shaders").insert([
+    { title, description, code, user_id: session.user.id }
+  ]);
+
+  if (error) return alert(error.message);
+
+  alert("Shader uploaded!");
+  loadShaders();
+}
+
+/* ---------- SHADER LIST ---------- */
+
+function colapse(elem){
+  const content = elem.nextElementSibling.nextElementSibling;
+  if (content.style.maxHeight) content.style.maxHeight = null;
+  else content.style.maxHeight = content.scrollHeight + "px";
+}
+
+async function loadShaders() {
+  const { data } = await supabase
+    .from("Shaders")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  const container = document.getElementById("shader-list");
+  container.innerHTML = "";
+
+  data.forEach(shader => {
+    const div = document.createElement("div");
+    div.className = "shader";
+
+    div.innerHTML = `
+      <button class="collapsible" onclick="colapse(this)">${shader.title}</button>
+      <p class="shader-description">${shader.description}</p>
+      <pre class="content">${shader.code}</pre>
+      <button onclick="loadShaderIntoEditor(\`${shader.code.replace(/`/g, "\\`")}\`,\`${shader.title}\`,\`${shader.description}\`)">
+        Load in Editor
+      </button>
+    `;
+
+    container.appendChild(div);
+  });
+}
+
+function loadShaderIntoEditor(code, title, description) {
+  document.getElementById("frag-editor").value = code;
+  document.getElementById("title").value = title;
+  document.getElementById("description").value = description;
+  compileShader();
+}
+
+loadShaders();
+</script>
+
+</body>
+</html>
+
